@@ -9,6 +9,635 @@
 </head>
 </html>
 
+<script>
+function setup2DCanvas() {
+  const canvas = document.getElementById('root-canvas');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const ctx = canvas.getContext('2d');
+  return { canvas, ctx };
+}
+
+function setup2DWebGLCanvas() {
+  const canvas = document.getElementById('root-canvas');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const glctx = canvas.getContext('webgl');
+  return { canvas, glctx };
+}
+
+const Context = {
+  ctx: null,
+  canvas: null,
+  t: 0.0,
+  delta: 0.0005,
+  figures: []
+};
+
+class Figure {
+  constructor({ x, y, scale, speed, end, initialTime }) {
+    this.width = Context.canvas.width;
+    this.height = Context.canvas.height;
+    this.pointArray = [];
+    this.startAt(initialTime);
+    this.placeAt(x, y);
+    this.scaleBy(scale);
+    this.accelerateBy(speed);
+    this.endAnimationIn(end);
+  }
+
+  startAt(t) {
+    this.initialTime = t;
+  }
+
+  placeAt(x, y) {
+    this.xoffset = x;
+    this.yoffset = y;
+  }
+
+  scaleBy(factor) {
+    this.scale = factor;
+  }
+
+  accelerateBy(factor) {
+    this.speedFactor = factor;
+  }
+
+  endAnimationIn(tmax) {
+    this.tmax = tmax;
+  }
+
+  animationEnded(t) {
+    return (t - this.initialTime) > this.tmax;
+  }
+
+  transformx(x) {
+    return x * this.scale + this.xoffset;
+  }
+
+  transformy(y) {
+    return y * this.scale + this.height - this.yoffset;
+  }
+
+  offsetX() {
+    return this.xoffset;
+  }
+
+  offsetY() {
+    return this.yoffset;
+  }
+
+  registerPoint(t) {
+    this.pointArray.push([this.x(t), this.height - this.y(t)]);
+  }
+
+  points() {
+    return this.pointArray;
+  }
+
+  draw(transformedPoints) {}
+}
+
+class Heart extends Figure {
+  constructor(args) {
+    super(args);
+  }
+
+  x(t) {
+    t -= this.initialTime;
+    t *= this.speedFactor;
+    return this.transformx(16 * Math.pow(Math.sin(t), 3));
+  }
+
+  y(t) {
+    t -= this.initialTime;
+    t *= this.speedFactor;
+    return this.transformy(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+  }
+
+  draw(transformedPoints) {
+
+    transformedPoints = transformedPoints || this.pointArray;
+
+    Context.ctx.lineWidth = 3;
+    Context.ctx.strokeStyle = "red";
+
+    Context.ctx.beginPath();
+
+    if (transformedPoints.length > 1) {
+      const [x, y] = transformedPoints[0];
+      Context.ctx.moveTo(x, y);
+    }
+
+    for (const [x, y] of transformedPoints.slice(1))
+      Context.ctx.lineTo(x, y);
+
+    Context.ctx.stroke();
+  }
+}
+
+class Rose extends Figure {
+  constructor({ color, n, ...rest }) {
+    super(rest);
+    this.color = color;
+    this.n = n;
+  }
+
+  r(t) {
+    return Math.cos(this.n * t);
+  }
+
+  x(t) {
+    t -= this.initialTime;
+    t *= this.speedFactor;
+    return this.transformx(this.r(t) * Math.cos(t));
+  }
+
+  y(t) {
+    t -= this.initialTime;
+    t *= this.speedFactor;
+    return this.transformy(this.r(t) * Math.sin(t));
+  }
+
+  registerPoint(t) {
+    super.registerPoint(t);
+  }
+
+  draw(transformedPoints) {
+
+    transformedPoints = transformedPoints || this.pointArray;
+
+    Context.ctx.lineWidth = 3;
+    Context.ctx.strokeStyle = this.color;
+
+    Context.ctx.beginPath();
+
+    if (transformedPoints.length > 1) {
+      const [x, y] = transformedPoints[0];
+      Context.ctx.moveTo(x, y);
+    }
+
+    for (const [x, y] of transformedPoints.slice(1))
+      Context.ctx.lineTo(x, y);
+
+    Context.ctx.stroke();
+  }
+}
+
+class Rotator extends Figure {
+  constructor({ child, anglePerTick, ...args }) {
+    super(args);
+    this.child = child;
+    this.childEnded = false;
+    this.anglePerTick = anglePerTick;
+    this.angle = 0;
+  }
+
+  animationEnded(t) {
+    if (this.child.animationEnded(t))
+      this.childEnded = true;
+
+    return false;
+  }
+
+  transformx(x) {
+    return this.child.transformx(x);
+  }
+
+  transformy(y) {
+    return this.child.transformy(y);
+  }
+
+  offsetX() {
+    return this.child.offsetX();
+  }
+
+  offsetY() {
+    return this.child.offsetY();
+  }
+
+  registerPoint(t) {
+    this.angle += this.anglePerTick;
+
+    if (!this.childEnded)
+      this.child.registerPoint(t);
+  }
+
+  points() {
+    const cx = this.child.offsetX();
+    const cy = this.child.offsetY();
+
+    return this.child.points()
+      .map(([x, y]) => [x - cx, y - cy])
+      .map(([x, y]) => [
+        x * Math.cos(this.angle) - y * Math.sin(this.angle),
+        x * Math.sin(this.angle) + y * Math.cos(this.angle),
+      ])
+      .map(([x, y]) => [x + cx, y + cy]);
+  }
+
+  draw(transformedPoints) {
+    this.child.draw(transformedPoints || this.points());
+  }
+}
+
+class Scaler extends Figure {
+  constructor({ child, scalePerTick, ...args }) {
+    super(args);
+    this.child = child;
+    this.childEnded = false;
+    this.scalePerTick = scalePerTick;
+    this.scale = 1;
+  }
+
+  animationEnded(t) {
+    if (this.child.animationEnded(t))
+      this.childEnded = true;
+
+    return false;
+  }
+
+  transformx(x) {
+    return this.child.transformx(x);
+  }
+
+  transformy(y) {
+    return this.child.transformy(y);
+  }
+
+  offsetX() {
+    return this.child.offsetX();
+  }
+
+  offsetY() {
+    return this.child.offsetY();
+  }
+
+  registerPoint(t) {
+    this.scale *= this.scalePerTick;
+
+    if (!this.childEnded)
+      this.child.registerPoint(t);
+  }
+
+  points() {
+    const cx = this.child.offsetX();
+    const cy = this.child.offsetY();
+
+    return this.child.points()
+      .map(([x, y]) => [x - cx, y - cy])
+      .map(([x, y]) => [x * this.scale, y * this.scale])
+      .map(([x, y]) => [x + cx, y + cy]);
+  }
+
+  draw(transformedPoints) {
+    this.child.draw(transformedPoints || this.points());
+  }
+}
+
+class MoverAway extends Figure {
+  constructor({ child, acceleration, fromx, fromy, ...args }) {
+    super(args);
+    this.child = child;
+    this.childEnded = false;
+    this.acceleration = acceleration;
+    this.position = 0;
+    this.speed = 0;
+    this.fromx = fromx;
+    this.fromy = fromy;
+  }
+
+  animationEnded(t) {
+    if (this.child.animationEnded(t))
+      this.childEnded = true;
+
+    return false;
+  }
+
+  transformx(x) {
+    return this.child.transformx(x);
+  }
+
+  transformy(y) {
+    return this.child.transformy(y);
+  }
+
+  offsetX() {
+    return this.child.offsetX();
+  }
+
+  offsetY() {
+    return this.child.offsetY();
+  }
+
+  registerPoint(t) {
+    if (!this.childEnded)
+      this.child.registerPoint(t);
+
+    this.speed += this.acceleration;
+    this.position += this.acceleration;
+  }
+
+  points() {
+    return this.child.points()
+      .map(([x, y]) => [
+        x + (x - this.fromx) * this.position,
+        y + (y - this.fromy) * this.position
+      ]);
+  }
+
+  draw(transformedPoints) {
+    this.child.draw(transformedPoints || this.points());
+  }
+}
+
+/**
+ * Must be used as the outermost decorator.
+ * Since its animation ends, and that's how
+ * the animation loop knows to remove it.
+ */
+class Fader extends Figure {
+  constructor({ child, fadeTime, ...args }) {
+    super(args);
+    this.child = child;
+    this.fadeTime = fadeTime;
+    this.alpha = 1;
+  }
+
+  computeNewAlpha(t) {
+    return 1 - (t - this.initialTime) / this.fadeTime;
+  }
+
+  animationEnded(t) {
+    return this.computeNewAlpha(t) <= 0;
+  }
+
+  transformx(x) {
+    return this.child.transformx(x);
+  }
+
+  transformy(y) {
+    return this.child.transformy(y);
+  }
+
+  registerPoint(t) {
+    if (!this.child.animationEnded(t))
+      this.child.registerPoint(t);
+
+    this.alpha = this.computeNewAlpha(t);
+  }
+
+  points() {
+    return this.child.points();
+  }
+
+  draw() {
+    Context.ctx.globalAlpha = this.alpha;
+    this.child.draw();
+    Context.ctx.globalAlpha = 1;
+  }
+}
+
+const roseRotationProbability = 0.5;
+const roseColors = ["green", "blue", "yellow", "orange", "purple", "pink"];
+const roseNs = [3/4, Math.E, 3, Math.PI, 4, 5, 9, 10];
+const heartProbability = 1 - roseNs.length / (roseNs.length + 1);
+const initialScale = 5;
+const scalePerTick = 1.002;
+const fadeTime = 5;
+
+function faderFigure(fn) {
+  // uses initial time to end animation
+  return new Fader({
+    initialTime: Context.t,
+    child: fn(Context.t),
+    fadeTime
+  });
+}
+
+function scaler(figure) {
+  return new Scaler({
+    scalePerTick,
+    child: figure,
+  });
+}
+
+function mover(figure) {
+  return new MoverAway({
+    acceleration: 0.0015,
+    fromx: Context.canvas.width / 2,
+    fromy: Context.canvas.height / 2,
+    child: figure,
+  });
+}
+
+function randomMovingFigure(initialTime) {
+  if (Math.random() < heartProbability)
+    return mover(scaler(randomHeart(initialTime)));
+
+  return mover(scaler(randomlyRotate(randomRose(initialTime))));
+}
+
+function randomRose(initialTime = 0) {
+  const [x, y] = randomPosition();
+  const scale = initialScale * 5;
+  const speed = randomBetween(3, 4);
+  const color = randomSelect(roseColors);
+
+  const n = randomSelect(roseNs);
+
+  const end = Math.floor(n) === n
+    ? (Math.PI * 2 * n) / speed
+    : (Math.PI * 2 * 10) / speed;
+
+  return new Rose({ x, y, scale, speed, end, n, color, initialTime })
+}
+
+function randomHeart(initialTime = 0) {
+  const [x, y] = randomPosition();
+  const scale = initialScale / 2;
+  const speed = randomBetween(4, 10);
+  const end = Math.PI * 2 / speed;
+  return new Heart({ x, y, scale, speed, end, initialTime })
+}
+
+function randomlyRotate(figure) {
+  if (Math.random() < roseRotationProbability)
+    return new Rotator({
+      anglePerTick: randomBetween(0.01, 0.05),
+      child: figure,
+    });
+
+  return figure;
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function randomSelect(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+const p = 1e9 + 7;
+
+let initial = Math.floor(p * Math.random());
+
+function randomPosition() {
+
+  initial = (initial * 997 + 17) % p;
+
+  return [
+    initial % Context.canvas.width,
+    Math.floor(initial / Context.canvas.width) % Context.canvas.height
+  ];
+}
+
+const spawnProbabilityPerTick = 0.2;
+const entityLimit = 250;
+
+const secret = [191, 78, 111, 115, 32, 67, 97, 115, 97, 109, 111, 115, 63];
+const oldTitle = document.title;
+
+let textAlpha = 0;
+let textOffsetY = 0;
+let altTextAlpha = 0;
+
+setInterval(() => {
+  const old = document.title;
+  document.title = secret.map(c => String.fromCharCode(c)).join("");
+  setTimeout(() => document.title = old, 2000);
+}, 10000);
+
+document.addEventListener('DOMContentLoaded', () => {
+  let { canvas: c, ctx: g } = setup2DCanvas();
+
+  Context.canvas = c;
+  Context.ctx = g;
+
+  window.addEventListener("resize", () => {
+    Context.ctx.fillStyle = "black";
+    Context.ctx.fillRect(0, 0, Context.canvas.width, Context.canvas.height);
+
+    Context.canvas.width = window.innerWidth;
+    Context.canvas.height = window.innerHeight;
+  });
+
+  setupAction({ start: 5000, interval: 10, action: () => {
+    textAlpha = textAlpha === 0 ? 0.01 : textAlpha * 1.02;
+    textOffsetY = Math.sin(Context.t * 4) * 10;
+  }});
+
+  setupAction({ start: 30000, interval: 10, action: () => {
+    altTextAlpha = altTextAlpha === 0 ? 0.01 : altTextAlpha * 1.02;
+  }});
+
+  setupAction({ start: 1, interval: 10000, action: () => {
+    document.title = secret.map(c => String.fromCharCode(c)).join("");
+  }});
+
+  setupAction({ start: 2001, interval: 10000, action: () => {
+    document.title = oldTitle;
+  }});
+
+  animateScene();
+});
+
+function animateScene() {
+  Context.ctx.fillStyle = "black";
+  Context.ctx.fillRect(0, 0, Context.canvas.width, Context.canvas.height);
+
+  let remaining = [];
+
+  for (const figure of Context.figures) {
+
+    if (!figure.animationEnded(Context.t)) {
+      figure.registerPoint(Context.t);
+      figure.draw();
+      remaining.push(figure);
+    }
+  }
+
+  Context.figures = remaining;
+
+  const W = Context.canvas.width;
+  const H = Context.canvas.height;
+
+  const cx = W / 2;
+  const cy = H / 2 + textOffsetY;
+  const radius = W;
+
+  Context.ctx.save();
+
+  Context.ctx.globalAlpha = Math.min(textAlpha, 1);
+  Context.ctx.textAlign = "center";
+  Context.ctx.shadowColor = "cyan";
+  Context.ctx.shadowOffsetX = 2;
+  Context.ctx.shadowOffsetY = 2;
+  Context.ctx.lineWidth = 5;
+  Context.ctx.strokeStyle = "white";
+  Context.ctx.fillStyle = "white";
+  Context.ctx.shadowBlur = 0;
+
+  Context.ctx.font = W / 20 + "px courier";
+
+  drawTextAlongArc("¡Coti Cuarto de Siglo!", cx, cy + radius - W / 20, radius, Math.PI / 5);
+
+  Context.ctx.font = W / 10 + "px courier";
+
+  drawTextAlongArc("25", cx, cy + radius + W / 20, radius, Math.PI / 28);
+
+  Context.ctx.globalAlpha = Math.min(altTextAlpha, 1);
+
+  Context.ctx.font = W / 40 + "px courier";
+  Context.ctx.shadowBlur = 0;
+  Context.ctx.shadowOffsetX = 0;
+  Context.ctx.shadowOffsetY = 0;
+  Context.ctx.shadowColor = "black";
+  Context.ctx.lineWidth = 1;
+
+  drawTextAlongArc("(valgo la pena)", cx, cy + radius + 2 * W / 20, radius, Math.PI / 14);
+
+  Context.ctx.restore();
+
+  requestAnimationFrame(now => {
+    Context.t = now * Context.delta;
+
+    if (Context.figures.length < entityLimit && Math.random() < spawnProbabilityPerTick)
+      Context.figures.push(faderFigure(randomMovingFigure));
+
+    animateScene();
+  });
+}
+
+function drawTextAlongArc(str, centerX, centerY, radius, angle) {
+  Context.ctx.save();
+
+  Context.ctx.translate(centerX, centerY);
+  Context.ctx.rotate(-1 * angle / 2);
+  Context.ctx.rotate(-1 * (angle / str.length) / 2);
+
+  for(let n = 0; n < str.length; n++) {
+    Context.ctx.rotate(angle / str.length);
+    Context.ctx.save();
+
+    Context.ctx.translate(0, -1 * radius);
+    Context.ctx.strokeText(str[n], 0, 0);
+    Context.ctx.fillText(str[n], 0, 0);
+
+    Context.ctx.restore();
+  }
+
+  Context.ctx.restore();
+}
+
+function setupAction({ start, interval, action }) {
+  setTimeout(() => {
+    action();
+    setInterval(action, interval);
+  }, start);
+}
+</script>
 <body>
 	<canvas id="root-canvas"></canvas>
 </body>
